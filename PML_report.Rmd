@@ -1,6 +1,6 @@
 ---
 title: "Practical Machine Learning Project"
-author: "Gwenael Gouerou"
+author: "Gwenaël Gouérou"
 date: "May, 2015"
 output: 
   html_document :
