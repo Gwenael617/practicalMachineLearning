@@ -1,0 +1,316 @@
+---
+title: "Practical Machine Learning Project"
+author: "Gwenaël Gouérou"
+date: "May, 2015"
+output: 
+  html_document :
+    toc : TRUE
+---
+
+```{r workingfile, echo=FALSE}
+setwd("C:/Users/user/Documents/Rwd/DSS08_Practical Machine Learning")
+```
+
+```{r emptyLines, echo=FALSE,message=FALSE,warning=FALSE}
+## to use if you want to reduce the spacing between 
+## R input code and its output
+
+## hook2 removes empty line between input and output
+## hook1 is more aggressive and collapses consecutive chunks
+## source : https://github.com/ramnathv/slidify/issues/189
+library(knitr)
+hook1 <- function(x){ gsub("```\n*```r*\n*", "", x) }
+hook2 <- function(x){ gsub("```\n+```\n", "", x) }
+# knit_hooks$set(document = hook2)  ## comment or un-comment if needed
+```
+
+# Abstract 
+
+This study is part of the _[Practical Machine Learning class on Coursera](https://www.coursera.org/course/predmachlearn)_. 
+The goal of the project is to predict how well sport activity is done.  
+Six participants using accelerometers on the belt, forearm, arm, and dumbell
+were asked to perform barbell lifts correctly and incorrectly in five different
+ways. The data come from this source :
+http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting
+Exercise Dataset).  
+
+The training and test data used for this project are available 
+[here : train set][Abs01] and [there : test set][Abs02].  
+
+[Abs01]: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+[Abs02]: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+After creating a prediction model of "how well did they did the exercise" 
+(the "classe variable" in the training set),
+the machine learning algorithm will be applied to the 20 test cases available
+in the test set.  
+
+# Loading the data  
+
+```{r fetchData, echo=FALSE}
+## verify if file exists : information on the data
+dataUrl<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+dataFile <- "pml-training.csv"
+dataUrl2<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+dataFile2 <- "pml-testing.csv"
+
+## verify the operating system and create download functions
+if(.Platform$OS.type == "windows"){ ## for windows
+        dataDl <- function(){download.file(url=dataUrl, destfile = dataFile)}
+        dataDl2 <- function(){download.file(url=dataUrl2, destfile = dataFile2)}}
+if(.Platform$OS.type != "windows"){ ## for Mac, Linux and other OS
+        dataDl <- function(){download.file(url=dataUrl, 
+                                           destfile = dataFile, 
+                                           method="curl")}
+        dataDl2 <- function(){download.file(url=dataUrl2, 
+                                            destfile = dataFile2, 
+                                            method="curl")}}
+
+## Verify if the file exists, if not download it
+if(!file.exists(dataFile)){
+        ## download the file (see functions above)
+        dataDl()
+        # record the date of download and write it in a text file
+        dateDownloaded <- date()
+        fileConn <- file("pml_data_dateDownloaded.txt")
+        writeLines(dateDownloaded, fileConn)
+        close(fileConn)
+        ## clean the global environement
+        rm(list = c("dateDownloaded", "fileConn"))
+}
+
+if(!file.exists(dataFile2)){
+        ## download the file (see functions above)
+        dataDl2()
+        # record the date of download and write it in a text file
+        dateDownloaded <- date()
+        fileConn <- file("pml_testing_dateDownloaded.txt")
+        writeLines(dateDownloaded, fileConn)
+        close(fileConn)
+        ## clean the global environement
+        rm(list = c("dateDownloaded", "fileConn"))
+}
+
+## clean the global environement
+rm(list= c("dataUrl", "dataFile", "dataDl"))
+rm(list= c("dataUrl2", "dataFile2", "dataDl2"))
+
+```
+
+
+When reading the data, the use of the argument `stringsAsFactors = FALSE`
+transforms automatically 37 columns from factor to character class. 
+The NAs strings have been found after some exploratory data analysis 
+(not reproduced here).
+
+```{r read, cache=TRUE}
+## read the files
+pml_training <- read.csv("pml-training.csv", stringsAsFactors = FALSE, 
+                         na.strings = c("NA", "", "#DIV/0!"))
+pml_testing <- read.csv("pml-testing.csv", stringsAsFactors = FALSE, 
+                        na.strings = c("NA", "", "#DIV/0!"))
+```
+
+Unfortunately the classe column we're interested in has also been converted 
+to character. It's imperative to convert it back to factor. This column
+being replaced by the problem_id column (see below) in the test set,
+there's no problem there.
+
+```{r convert classe column}
+c(names(pml_training)[160], names(pml_testing)[160])
+pml_training$classe <- as.factor(pml_training$classe)
+unique(pml_training$classe)             ## the 5 classes of performance
+```
+
+We can see that the training set is relatively homogeneously distributed 
+in between the different ways of performing the barbell lifts :
+
+```{r proportionClasse}
+table(pml_training$classe)
+classeTable <- table(pml_training$classe)
+## show the proportion/percentage of each classe
+prop.table(classeTable)   ## request a table as an argument
+
+```
+
+
+# Cleaning the Data  
+
+Now it's time to clean the data. We can see that there is 17 kind of columns
+regarding the propotion of NAs values :  
+
+```{r NAs}
+unique(colMeans(is.na(pml_training)))
+```
+
+One type of column has no missing values at all while the proportion in the 
+columns containing missing values is always above 97%. With a so high
+percentage imputing the missing values would be useless. We'll then remove
+those columns. We'll remove also columns that don't add to the prediction.    
+
+
+```{r dropUselessColumns}
+dropNA <- names(pml_training[,(colMeans(is.na(pml_training)) >.97)])
+drop2 <- names(pml_training[,grepl("^X|user_name|timestamp|window", names(pml_training))])
+
+dropFINAL <- c(dropNA, drop2)
+
+## keep only the columns not in the drop selection :
+training <- pml_training[, !(names(pml_training) %in% dropFINAL)]
+testing <- pml_testing[, !(names(pml_testing) %in% dropFINAL)]
+
+```
+
+
+```{r star3, results='asis',message=FALSE,echo=FALSE,strip.white=TRUE}
+library(stargazer)
+a <- dim(pml_training) ; b <- dim(training)
+c <- dim(pml_testing) ; d <- dim(testing)
+star <- data.frame() ; star <- rbind(a,c)
+star2<- data.frame() ; star2 <- rbind(b,d)
+star3 <- data.frame(); star3 <- cbind(star, star2)
+row.names(star3) <- c("training set", "testing set")
+colnames(star3) <- c("rows before  .", "columns before  .","rows after  .",
+                     "columns after")
+
+stargazer(star3, header=FALSE, summary=FALSE, 
+          title="comparison of the dimensions before and after removing", 
+          type="html")
+```
+
+# Splitting the data for cross-validation  
+
+Instead of using the build-in out-of-sample error in the functions,
+I prefered to create a validation set out of the training set, 
+thus performing a two-fold cross-validation.
+
+In this case, I used the myTraining set to create the model, the validation
+set to refine, and the test set was used only for predicting the 20 cases
+for the submission assignement of this class.
+
+
+```{r createValidationSet, message=FALSE,warning=FALSE}
+library(caret) ; library(randomForest)
+set.seed(2015)                  ## set the seed for reproducibility
+inTrain <- createDataPartition(training$classe, p=0.7, list=FALSE)
+myTraining <- training[inTrain,]
+validation <- training[-inTrain,]
+```
+
+# Fitting the model  
+
+I tested six different models. The computation time ranges from 8 minutes to 12 hours ! While the accuracy ranges from 97,5% to 99,2%. 
+The model I choose to present here is the fastest one (8 minutes) and gives
+the highest accuracy on the validation set (99,2%).
+
+I focused my attention on the caret package as it was at the center of 
+this class.  
+
+The key to reduce the computational time was to reduce the resampling 
+parameter and the number of trees. For exemple, here I chose to create
+a random forest with only 5 repeats of the bootstrap resampling method,
+and 25 trees.
+
+The key to maximize the accuracy was to prefer bootstrap resampling with
+replacement against K-fold cross-validation.
+
+As I'm doing my own two-fold cross-validation with the validation set.
+The need to use the built-in K-fold method was reduced. It allows me
+the use of a second cross-validation method (bootstrapping) and thus
+improve the overall accuracy of the model.  
+
+I calculate my out-of-sample error based on my two-fold cross-validation.  
+
+I choose not to pre-process. In some of my models I use the principal 
+component analysis (PCA) pre-processing, however this resulted in loss of
+accuracy of nearly two percent. Not doing may lead to overfitting, 
+however as the number of repeats of bootstrap (five) and the number of 
+trees(25) are small, I'm confident to have _avoided overfitting_, 
+while with a quick computational time (I use a 2gb RAM computer), 
+my model can _pass the scalability test_ and be used on larger dataset.  
+
+
+```{r startTime, echo=FALSE}
+stt <- Sys.time()
+```
+
+```{r fit, message=FALSE,warning=FALSE,cache=TRUE,eval=TRUE}
+set.seed(2015)
+control_Rf <- trainControl(method="boot", 5)       ## bootstrap 5 repeats
+fit_Rf <- train(myTraining$classe ~ ., data=(myTraining), method="rf", 
+                trControl=control_Rf, ntree=25)
+```
+
+
+```{r endComputation, echo=FALSE}
+endProcess <- Sys.time() ; print(round(endProcess - stt),2)
+```
+
+```{r saveResults, echo=FALSE,eval=TRUE}
+## save results
+saveRDS(fit_Rf, file="pml_modelFINAL.rds")
+```
+
+# Cross-validating on the validation set  
+
+In order to verify the accuracy of the model, I test it against the
+validation set :
+
+```{r predictValidation}
+predictVAL <- predict(fit_Rf, validation)
+confusionMatrix(validation$classe, predictVAL)
+```
+
+```{r accuracy}
+modelAcc <- round(confusionMatrix(validation$classe, predictVAL)$overall[[1]],4)*100
+## modelAcc will be used as an embedded R code in the next line.
+```
+
+__The accuracy is `r modelAcc`%, so the out-of-sample error is__ 
+__`r 100-modelAcc` %.__
+
+As we can see that my out-of-sample error is close to the one calculated by
+the built-in function :
+
+```{r OOB}
+fit_Rf$finalModel$err.rate[25,1]
+```
+
+# Predicting on the test set  
+
+The machine learning algorithm is now to be applied to the 20 cases of 
+the test set.
+
+```{r predictTest}
+predict(fit_Rf, testing)
+```
+
+Number of correct predictions : 20 out of 20.
+
+# Appendix  
+
+```{r modelResults}
+fit_Rf
+fit_Rf$finalModel
+varImp(fit_Rf)
+plot(fit_Rf$finalModel)
+sessionInfo()
+```
+
+
+
+# References  
+* Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H.
+[Qualitative Activity Recognition of Weight Lifting Exercises][Ref01].
+Proceedings of 4th International Conference in Cooperation with SIGCHI 
+(Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013. 
+[Read more][Ref02] / [Documento][Ref03].
+
+[Ref01]: http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201
+[Ref02]: http://groupware.les.inf.puc-rio.br/har#ixzz3afJgK17S
+[Ref03]: http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf]
+
+* Hlavac, Marek (2014). stargazer: LaTeX code and ASCII text for 
+well-formatted regression and summary statistics tables.
+R package version 5.1. http://CRAN.R-project.org/package=stargazer 
+
